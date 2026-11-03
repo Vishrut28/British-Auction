@@ -1,3 +1,10 @@
+# The whole stack: docker compose up --build
+# App: http://localhost:8080   API docs: http://localhost:8000/docs
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+psycopg://rfq:rfq@db:5432/rfq
+  REDIS_URL: redis://redis:6379/0
+
 services:
   db:
     image: postgres:16-alpine
@@ -15,6 +22,47 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment: *backend-env
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  # Celery worker with beat built in: closes auctions when their time is up.
+  worker:
+    build: ./backend
+    command: celery -A app.worker worker --beat --loglevel=info -s /tmp/celerybeat-schedule
+    environment: *backend-env
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
 
 volumes:
   pgdata:
