@@ -1,5 +1,6 @@
 # The whole stack: docker compose up --build
 # App: http://localhost:8080   API docs: http://localhost:8000/docs
+# Host ports can be changed if taken, e.g. REDIS_PORT=6380 docker compose up
 
 x-backend-env: &backend-env
   DATABASE_URL: postgresql+psycopg://rfq:rfq@db:5432/rfq
@@ -14,7 +15,7 @@ services:
       POSTGRES_DB: rfq
     # Host port 5433 so it does not clash with a Postgres already on 5432.
     ports:
-      - "5433:5432"
+      - "${DB_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -26,7 +27,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -37,7 +38,7 @@ services:
     build: ./backend
     environment: *backend-env
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -61,7 +62,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "8080:80"
+      - "${WEB_PORT:-8080}:80"
     depends_on:
       backend:
         condition: service_healthy

@@ -46,6 +46,8 @@ docker compose exec backend python -m app.seed --demo
 
 Compose runs Postgres, Redis, the API (which applies migrations on start), the
 Celery worker that closes auctions on time, and the frontend on nginx.
+If a host port is taken, override it: `DB_PORT`, `REDIS_PORT`, `API_PORT`,
+`WEB_PORT` (for example `REDIS_PORT=6380 docker compose up --build`).
 
 ### Try the extension rules
 
