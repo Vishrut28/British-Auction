@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,9 +23,15 @@ from app.schemas import (
     SupplierOut,
 )
 
+Db = Annotated[Session, Depends(get_db)]
+Now = Annotated[datetime, Depends(get_now)]
+
 app = FastAPI(
     title="British Auction RFQ",
-    description="RFQs with British auction bidding: auto-extension near close, capped by a forced close.",
+    description=(
+        "RFQs with British auction bidding: bids near the close extend the auction, "
+        "never past the forced close."
+    ),
 )
 app.add_middleware(
     CORSMiddleware,
@@ -50,13 +57,13 @@ def _bid_rejected(_: Request, exc: BidRejected) -> JSONResponse:
 
 
 @app.get("/api/health")
-def health(db: Session = Depends(get_db)) -> dict[str, str]:
+def health(db: Db) -> dict[str, str]:
     db.execute(text("SELECT 1"))
     return {"status": "ok"}
 
 
 @app.get("/api/time")
-def server_time(now: datetime = Depends(get_now)) -> dict[str, datetime]:
+def server_time(now: Now) -> dict[str, datetime]:
     """The server clock, so the UI countdown can correct for a wrong local clock."""
     return {"server_time": now}
 
@@ -65,26 +72,28 @@ def server_time(now: datetime = Depends(get_now)) -> dict[str, datetime]:
 
 
 @app.get("/api/suppliers", response_model=list[SupplierOut])
-def list_suppliers(db: Session = Depends(get_db)):
+def list_suppliers(db: Db):
     return services.list_suppliers(db)
 
 
 @app.post("/api/suppliers", response_model=SupplierOut, status_code=status.HTTP_201_CREATED)
-def create_supplier(data: SupplierCreate, db: Session = Depends(get_db)):
+def create_supplier(data: SupplierCreate, db: Db):
     return services.create_supplier(db, data)
 
 
 # --- RFQs -----------------------------------------------------------------------------
+# Reads first run the close sweep (idempotent), so the status and the activity
+# log are complete even when the background worker is not running.
 
 
 @app.get("/api/rfqs", response_model=RfqList)
-def list_rfqs(db: Session = Depends(get_db), now: datetime = Depends(get_now)):
+def list_rfqs(db: Db, now: Now):
     services.sync_statuses(db, now)
     return {"server_time": now, "items": services.list_rfqs(db, now)}
 
 
 @app.post("/api/rfqs", response_model=RfqDetail, status_code=status.HTTP_201_CREATED)
-def create_rfq(data: RfqCreate, db: Session = Depends(get_db), now: datetime = Depends(get_now)):
+def create_rfq(data: RfqCreate, db: Db, now: Now):
     try:
         rfq = services.create_rfq(db, data, now)
     except ValueError as exc:
@@ -93,19 +102,18 @@ def create_rfq(data: RfqCreate, db: Session = Depends(get_db), now: datetime = D
 
 
 @app.get("/api/rfqs/{rfq_id}", response_model=RfqDetail)
-def get_rfq(rfq_id: int, db: Session = Depends(get_db), now: datetime = Depends(get_now)):
+def get_rfq(rfq_id: int, db: Db, now: Now):
     services.sync_statuses(db, now, rfq_id)
     return services.rfq_detail(db, rfq_id, now)
 
 
 @app.get("/api/rfqs/{rfq_id}/events", response_model=list[EventOut])
-def list_events(rfq_id: int, db: Session = Depends(get_db), now: datetime = Depends(get_now)):
+def list_events(rfq_id: int, db: Db, now: Now):
+    services.get_rfq(db, rfq_id)  # 404 if unknown
     services.sync_statuses(db, now, rfq_id)
-    return services.rfq_detail(db, rfq_id, now)["events"]
+    return services.list_events(db, rfq_id)
 
 
 @app.post("/api/rfqs/{rfq_id}/bids", response_model=BidResult, status_code=status.HTTP_201_CREATED)
-def place_bid(
-    rfq_id: int, data: BidCreate, db: Session = Depends(get_db), now: datetime = Depends(get_now)
-):
+def place_bid(rfq_id: int, data: BidCreate, db: Db, now: Now):
     return services.place_bid(db, rfq_id, data, now)

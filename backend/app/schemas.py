@@ -9,7 +9,9 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, EmailStr, Field, mode
 from app.engine import validate_rfq_times
 from app.models import AuctionStatus, EventType, TriggerType
 
-Money = Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)]
+# Up to 999,999,999.99 per charge, so the sum of three still fits the
+# NUMERIC(12, 2) total column.
+Money = Annotated[Decimal, Field(ge=0, max_digits=11, decimal_places=2)]
 Minutes = Annotated[int, Field(ge=1, le=24 * 60)]
 
 
@@ -41,20 +43,38 @@ class RfqCreate(BaseModel):
     bid_start_at: AwareDatetime
     bid_close_at: AwareDatetime
     forced_close_at: AwareDatetime
-    trigger_window_minutes: Minutes  # X
-    extension_minutes: Minutes  # Y
-    trigger_type: TriggerType
+    # The brief's "British Auction option". With it off, the RFQ closes at its
+    # bid close time and is never extended; X, Y and the trigger are ignored.
+    is_british_auction: bool = True
+    trigger_window_minutes: Minutes | None = None  # X
+    extension_minutes: Minutes | None = None  # Y
+    trigger_type: TriggerType | None = None
 
     @model_validator(mode="after")
-    def check_times(self) -> "RfqCreate":
+    def check(self) -> "RfqCreate":
         validate_rfq_times(self.bid_start_at, self.bid_close_at, self.forced_close_at)
+        if self.is_british_auction:
+            missing = [
+                label
+                for label, value in (
+                    ("trigger window (X)", self.trigger_window_minutes),
+                    ("extension duration (Y)", self.extension_minutes),
+                    ("extension trigger", self.trigger_type),
+                )
+                if value is None
+            ]
+            if missing:
+                raise ValueError(f"A British auction needs: {', '.join(missing)}.")
+        else:
+            self.trigger_window_minutes = self.extension_minutes = self.trigger_type = None
         return self
 
 
 class AuctionConfig(BaseModel):
-    trigger_window_minutes: int
-    extension_minutes: int
-    trigger_type: TriggerType
+    is_british_auction: bool
+    trigger_window_minutes: int | None
+    extension_minutes: int | None
+    trigger_type: TriggerType | None
 
 
 class RfqSummary(BaseModel):
@@ -73,7 +93,8 @@ class RfqSummary(BaseModel):
     bid_count: int
     supplier_count: int
     extension_count: int
-    trigger_type: TriggerType
+    is_british_auction: bool
+    trigger_type: TriggerType | None
 
 
 class RfqList(BaseModel):

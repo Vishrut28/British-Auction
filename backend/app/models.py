@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Computed,
     Date,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -30,20 +32,20 @@ Money = Numeric(12, 2)
 TimestampTZ = DateTime(timezone=True)
 
 
-class TriggerType(str, enum.Enum):
+class TriggerType(enum.StrEnum):
     BID_RECEIVED = "BID_RECEIVED"
     ANY_RANK_CHANGE = "ANY_RANK_CHANGE"
     L1_CHANGE = "L1_CHANGE"
 
 
-class AuctionStatus(str, enum.Enum):
+class AuctionStatus(enum.StrEnum):
     SCHEDULED = "SCHEDULED"
     ACTIVE = "ACTIVE"
     CLOSED = "CLOSED"
     FORCE_CLOSED = "FORCE_CLOSED"
 
 
-class EventType(str, enum.Enum):
+class EventType(enum.StrEnum):
     RFQ_CREATED = "RFQ_CREATED"
     BID_PLACED = "BID_PLACED"
     TIME_EXTENDED = "TIME_EXTENDED"
@@ -88,6 +90,19 @@ class Rfq(Base):
         CheckConstraint("trigger_window_minutes > 0", name="trigger_window_positive"),
         CheckConstraint("extension_minutes > 0", name="extension_positive"),
         CheckConstraint("extension_count >= 0", name="extension_count_non_negative"),
+        # X, Y and the trigger are set exactly when the British auction option is on.
+        CheckConstraint(
+            "(is_british_auction AND trigger_window_minutes IS NOT NULL"
+            " AND extension_minutes IS NOT NULL AND trigger_type IS NOT NULL)"
+            " OR (NOT is_british_auction AND trigger_window_minutes IS NULL"
+            " AND extension_minutes IS NULL AND trigger_type IS NULL)",
+            name="auction_config_matches_option",
+        ),
+        # Only a British auction can be extended.
+        CheckConstraint(
+            "is_british_auction OR (current_close_at = bid_close_at AND extension_count = 0)",
+            name="only_british_auction_extends",
+        ),
         # The closing job looks for open auctions whose close time has passed.
         Index("ix_rfqs_status_current_close_at", "status", "current_close_at"),
     )
@@ -102,9 +117,12 @@ class Rfq(Base):
     current_close_at: Mapped[datetime] = mapped_column(TimestampTZ)  # after extensions
     forced_close_at: Mapped[datetime] = mapped_column(TimestampTZ)
 
-    trigger_window_minutes: Mapped[int] = mapped_column(Integer)  # X
-    extension_minutes: Mapped[int] = mapped_column(Integer)  # Y
-    trigger_type: Mapped[TriggerType] = mapped_column(str_enum(TriggerType, "trigger_type"))
+    # The brief's "British Auction option". Off means a plain RFQ: it closes at
+    # bid_close_at and is never extended, so X, Y and the trigger are NULL.
+    is_british_auction: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    trigger_window_minutes: Mapped[int | None] = mapped_column(Integer)  # X
+    extension_minutes: Mapped[int | None] = mapped_column(Integer)  # Y
+    trigger_type: Mapped[TriggerType | None] = mapped_column(str_enum(TriggerType, "trigger_type"))
 
     # A cache for fast listing. The true status is computed from the times.
     status: Mapped[AuctionStatus] = mapped_column(
@@ -176,9 +194,7 @@ class AuctionEvent(Base):
     rfq_id: Mapped[int] = mapped_column(ForeignKey("rfqs.id", ondelete="CASCADE"))
     event_type: Mapped[EventType] = mapped_column(str_enum(EventType, "event_type"))
     bid_id: Mapped[int | None] = mapped_column(ForeignKey("bids.id", ondelete="SET NULL"))
-    supplier_id: Mapped[int | None] = mapped_column(
-        ForeignKey("suppliers.id", ondelete="SET NULL")
-    )
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id", ondelete="SET NULL"))
 
     previous_close_at: Mapped[datetime | None] = mapped_column(TimestampTZ)
     new_close_at: Mapped[datetime | None] = mapped_column(TimestampTZ)

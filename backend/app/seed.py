@@ -88,7 +88,8 @@ def main() -> None:
         print(f"Suppliers: {', '.join(ids)}")
         if args.demo:
             rfq = seed_demo_auction(db, ids)
-            print(f"Demo auction {rfq.reference_id} (id {rfq.id}) closes at {rfq.current_close_at:%H:%M:%S} UTC")
+            close = f"{rfq.current_close_at:%H:%M:%S} UTC"
+            print(f"Demo auction {rfq.reference_id} (id {rfq.id}) closes at {close}")
 
 
 if __name__ == "__main__":

@@ -172,7 +172,9 @@ def test_l1_change_needs_an_existing_l1():
 
 def test_bid_received_trigger_extends_on_any_bid_in_window():
     # brief 6.3a: X = 10, bid at 5:55 PM -> extends by Y
-    out = evaluate([s(A, "500", at(12, 0))], s(B, "900", at(17, 55)), TriggerType.BID_RECEIVED, at(17, 55))
+    out = evaluate(
+        [s(A, "500", at(12, 0))], s(B, "900", at(17, 55)), TriggerType.BID_RECEIVED, at(17, 55)
+    )
     assert out.triggered and out.new_close_at == at(18, 5)
     assert "Bid received from Supplier B" in out.reason
 
@@ -244,7 +246,9 @@ def test_trigger_types_nest():
 
 
 def test_extension_is_capped_and_says_so():
-    out = evaluate([], s(A, "500", at(18, 27)), TriggerType.BID_RECEIVED, at(18, 27), close=at(18, 28))
+    out = evaluate(
+        [], s(A, "500", at(18, 27)), TriggerType.BID_RECEIVED, at(18, 27), close=at(18, 28)
+    )
     assert out.new_close_at == FORCED
     assert "Extended by 2 min instead of 5 min" in out.reason
 
@@ -262,7 +266,9 @@ def test_repeated_extensions_stop_at_forced_close():
         now = at(17, 0) + timedelta(minutes=minute)
         if now >= close:
             break
-        close = evaluate([], s(A, "1", now), TriggerType.BID_RECEIVED, now, close=close).new_close_at
+        close = evaluate(
+            [], s(A, "1", now), TriggerType.BID_RECEIVED, now, close=close
+        ).new_close_at
         assert close <= FORCED
     assert close == FORCED
 
@@ -283,3 +289,18 @@ def test_repeated_extensions_stop_at_forced_close():
 )
 def test_status(now, close, expected):
     assert compute_status(START, close, FORCED, now) == expected
+
+
+def test_plain_rfq_ranks_but_never_triggers():
+    out = evaluate_bid(
+        now=at(17, 59),
+        standings=[s(A, "400", at(12, 0))],
+        new=s(B, "300", at(17, 59)),
+        trigger_type=None,
+        window_minutes=None,
+        extension_minutes=None,
+        current_close_at=CLOSE,
+        forced_close_at=FORCED,
+    )
+    assert out.ranking_after == [B, A]
+    assert not out.triggered and not out.extended and out.reason is None

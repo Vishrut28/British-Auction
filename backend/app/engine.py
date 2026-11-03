@@ -150,16 +150,23 @@ def evaluate_bid(
     now: datetime,
     standings: Sequence[Standing],
     new: Standing,
-    trigger_type: TriggerType,
-    window_minutes: int,
-    extension_minutes: int,
+    trigger_type: TriggerType | None,
+    window_minutes: int | None,
+    extension_minutes: int | None,
     current_close_at: datetime,
     forced_close_at: datetime,
     names: Mapping[int, str] | None = None,
 ) -> BidOutcome:
-    """Decide whether an accepted bid extends the auction, and explain why."""
+    """Decide whether an accepted bid extends the auction, and explain why.
+
+    `trigger_type` is None for a plain RFQ (British auction option off): the
+    bid is ranked as usual but never extends anything.
+    """
     before = ranking_ids(standings)
     after = ranking_ids(with_new_bid(standings, new))
+    if trigger_type is None or window_minutes is None or extension_minutes is None:
+        return BidOutcome(before, after, False, False, current_close_at, current_close_at, None)
+
     in_window = in_trigger_window(now, current_close_at, window_minutes)
     triggered = in_window and trigger_fired(trigger_type, before, after)
 
@@ -171,7 +178,10 @@ def evaluate_bid(
         cause = f"{cause} within the last {window_minutes} min before close"
         capped = current_close_at + timedelta(minutes=extension_minutes) > forced_close_at
         if new_close == current_close_at:
-            reason = f"{cause}, but the auction is already at its forced close time, so it was not extended."
+            reason = (
+                f"{cause}, but the auction is already at its forced close time, "
+                "so it was not extended."
+            )
         elif capped:
             added = _format_duration(new_close - current_close_at)
             reason = (

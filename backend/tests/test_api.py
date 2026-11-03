@@ -5,10 +5,13 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 
 from app import services
 from app.db import SessionLocal
 from app.main import app
+from app.models import Rfq
 from app.schemas import BidCreate
 
 
@@ -18,12 +21,16 @@ def iso(hh: int, mm: int) -> str:
 
 def make_suppliers(client, *names):
     return [
-        client.post("/api/suppliers", json={"name": n, "email": f"{n.lower().replace(' ', '')}@example.com"}).json()["id"]
+        client.post(
+            "/api/suppliers", json={"name": n, "email": f"{n.lower().replace(' ', '')}@example.com"}
+        ).json()["id"]
         for n in names
     ]
 
 
-def make_rfq(client, trigger="BID_RECEIVED", x=10, y=5, close=(18, 0), forced=(18, 30), ref="RFQ-001"):
+def make_rfq(
+    client, trigger="BID_RECEIVED", x=10, y=5, close=(18, 0), forced=(18, 30), ref="RFQ-001"
+):
     r = client.post(
         "/api/rfqs",
         json={
@@ -65,7 +72,13 @@ def test_create_rfq_and_read_it_back(client, clock):
     d = client.get(f"/api/rfqs/{rfq_id}").json()
     assert d["status"] == "SCHEDULED"
     assert d["current_close_at"] == d["bid_close_at"]
-    assert d["config"] == {"trigger_window_minutes": 10, "extension_minutes": 5, "trigger_type": "BID_RECEIVED"}
+    assert d["is_british_auction"] is True
+    assert d["config"] == {
+        "is_british_auction": True,
+        "trigger_window_minutes": 10,
+        "extension_minutes": 5,
+        "trigger_type": "BID_RECEIVED",
+    }
     assert [e["event_type"] for e in d["events"]] == ["RFQ_CREATED"]
 
 
@@ -73,9 +86,15 @@ def test_forced_close_must_be_after_bid_close(client):
     r = client.post(
         "/api/rfqs",
         json={
-            "reference_id": "BAD", "name": "x", "pickup_date": "2026-11-10",
-            "bid_start_at": iso(10, 0), "bid_close_at": iso(18, 0), "forced_close_at": iso(18, 0),
-            "trigger_window_minutes": 10, "extension_minutes": 5, "trigger_type": "L1_CHANGE",
+            "reference_id": "BAD",
+            "name": "x",
+            "pickup_date": "2026-11-10",
+            "bid_start_at": iso(10, 0),
+            "bid_close_at": iso(18, 0),
+            "forced_close_at": iso(18, 0),
+            "trigger_window_minutes": 10,
+            "extension_minutes": 5,
+            "trigger_type": "L1_CHANGE",
         },
     )
     assert r.status_code == 422
@@ -87,9 +106,15 @@ def test_reference_id_is_unique(client):
     r = client.post(
         "/api/rfqs",
         json={
-            "reference_id": "RFQ-001", "name": "x", "pickup_date": "2026-11-10",
-            "bid_start_at": iso(10, 0), "bid_close_at": iso(18, 0), "forced_close_at": iso(18, 30),
-            "trigger_window_minutes": 10, "extension_minutes": 5, "trigger_type": "L1_CHANGE",
+            "reference_id": "RFQ-001",
+            "name": "x",
+            "pickup_date": "2026-11-10",
+            "bid_start_at": iso(10, 0),
+            "bid_close_at": iso(18, 0),
+            "forced_close_at": iso(18, 30),
+            "trigger_window_minutes": 10,
+            "extension_minutes": 5,
+            "trigger_type": "L1_CHANGE",
         },
     )
     assert r.status_code == 409
@@ -243,8 +268,12 @@ def test_simultaneous_bids_each_see_the_latest_close_time(client, clock, round_)
                 db,
                 rfq_id,
                 BidCreate(
-                    supplier_id=supplier_id, carrier_name="C", freight_charges=total,
-                    origin_charges=0, destination_charges=0, transit_time_days=2,
+                    supplier_id=supplier_id,
+                    carrier_name="C",
+                    freight_charges=total,
+                    origin_charges=0,
+                    destination_charges=0,
+                    transit_time_days=2,
                     quote_valid_until="2026-12-31",
                 ),
                 now,
@@ -254,7 +283,10 @@ def test_simultaneous_bids_each_see_the_latest_close_time(client, clock, round_)
         finally:
             db.close()
 
-    threads = [threading.Thread(target=place, args=(a, 1000)), threading.Thread(target=place, args=(b, 900))]
+    threads = [
+        threading.Thread(target=place, args=(a, 1000)),
+        threading.Thread(target=place, args=(b, 900)),
+    ]
     for t in threads:
         t.start()
     for t in threads:
@@ -274,4 +306,166 @@ def test_simultaneous_bids_each_see_the_latest_close_time(client, clock, round_)
 
 def test_openapi_lists_the_endpoints():
     paths = TestClient(app).get("/openapi.json").json()["paths"]
-    assert {"/api/rfqs", "/api/rfqs/{rfq_id}", "/api/rfqs/{rfq_id}/bids", "/api/suppliers"} <= set(paths)
+    assert {"/api/rfqs", "/api/rfqs/{rfq_id}", "/api/rfqs/{rfq_id}/bids", "/api/suppliers"} <= set(
+        paths
+    )
+
+
+# --- More validation and errors -------------------------------------------------------
+
+
+def rfq_body(**overrides):
+    body = {
+        "reference_id": "RFQ-X",
+        "name": "x",
+        "pickup_date": "2026-11-10",
+        "bid_start_at": iso(10, 0),
+        "bid_close_at": iso(18, 0),
+        "forced_close_at": iso(18, 30),
+        "trigger_window_minutes": 10,
+        "extension_minutes": 5,
+        "trigger_type": "L1_CHANGE",
+    }
+    body.update(overrides)
+    return body
+
+
+def quote(supplier_id, freight="100", origin="0", destination="0", valid="2026-12-31"):
+    return {
+        "supplier_id": supplier_id,
+        "carrier_name": "C",
+        "freight_charges": freight,
+        "origin_charges": origin,
+        "destination_charges": destination,
+        "transit_time_days": 2,
+        "quote_valid_until": valid,
+    }
+
+
+def test_close_time_in_the_past_is_rejected(client, clock):
+    clock.set(18, 1)
+    r = client.post("/api/rfqs", json=rfq_body())
+    assert r.status_code == 422 and "must be in the future" in r.text
+
+
+def test_british_auction_needs_x_y_and_trigger(client):
+    r = client.post("/api/rfqs", json=rfq_body(trigger_window_minutes=None, trigger_type=None))
+    assert r.status_code == 422
+    assert "trigger window (X)" in r.text and "extension trigger" in r.text
+
+
+@pytest.mark.parametrize("field", ["trigger_window_minutes", "extension_minutes"])
+@pytest.mark.parametrize("value", [0, -5, 1441])
+def test_x_and_y_must_be_sensible_minutes(client, field, value):
+    assert client.post("/api/rfqs", json=rfq_body(**{field: value})).status_code == 422
+
+
+def test_unknown_rfq_and_supplier_are_404(client, clock):
+    (a,) = make_suppliers(client, "Supplier A")
+    assert client.get("/api/rfqs/999").status_code == 404
+    assert client.get("/api/rfqs/999/events").status_code == 404
+    assert bid(client, 999, a, 1000).status_code == 404
+    rfq_id = make_rfq(client)
+    clock.set(11, 0)
+    assert bid(client, rfq_id, 999, 1000).status_code == 404
+
+
+def test_duplicate_supplier_email_is_409(client):
+    make_suppliers(client, "Supplier A")
+    r = client.post("/api/suppliers", json={"name": "Other", "email": "SUPPLIERA@example.com"})
+    assert r.status_code == 409
+
+
+def test_bid_at_exact_close_is_rejected(client, clock):
+    (a,) = make_suppliers(client, "Supplier A")
+    rfq_id = make_rfq(client)
+    clock.set(18, 0)
+    r = bid(client, rfq_id, a, 1000)
+    assert r.status_code == 409 and "closed" in r.json()["detail"]
+
+
+def test_quote_validity_in_the_past_is_rejected(client, clock):
+    (a,) = make_suppliers(client, "Supplier A")
+    rfq_id = make_rfq(client)
+    clock.set(11, 0)
+    r = client.post(f"/api/rfqs/{rfq_id}/bids", json=quote(a, valid="2026-11-01"))
+    assert r.status_code == 409 and "validity" in r.json()["detail"]
+
+
+def test_huge_charges_are_rejected_not_a_server_error(client, clock):
+    (a,) = make_suppliers(client, "Supplier A")
+    rfq_id = make_rfq(client)
+    clock.set(11, 0)
+    r = client.post(f"/api/rfqs/{rfq_id}/bids", json=quote(a, freight="99999999999.99"))
+    assert r.status_code == 422
+    # The largest accepted charges still fit the total column.
+    biggest = "999999999.99"
+    ok = client.post(f"/api/rfqs/{rfq_id}/bids", json=quote(a, biggest, biggest, biggest))
+    assert ok.status_code == 201 and ok.json()["bid"]["total_amount"] == "2999999999.97"
+
+
+# --- Rank-change trigger through the API ----------------------------------------------
+
+
+def test_rank_change_trigger(client, clock):
+    a, b, c = make_suppliers(client, "Supplier A", "Supplier B", "Supplier C")
+    rfq_id = make_rfq(client, trigger="ANY_RANK_CHANGE")
+    clock.set(11, 0)
+    bid(client, rfq_id, a, 800)
+    bid(client, rfq_id, b, 900)
+    clock.set(17, 55)
+    # C enters last: nobody already ranked moves, so no extension.
+    assert bid(client, rfq_id, c, 1000).json()["extended"] is False
+    # C passes B: B drops from L2 to L3.
+    r = bid(client, rfq_id, c, 850).json()
+    assert r["extended"] and r["current_close_at"] == iso(18, 5)
+    assert "Supplier B L2→L3" in r["reason"]
+
+
+# --- British Auction option off -------------------------------------------------------
+
+
+def test_plain_rfq_never_extends_and_closes_normally(client, clock):
+    a, b = make_suppliers(client, "Supplier A", "Supplier B")
+    r = client.post("/api/rfqs", json=rfq_body(is_british_auction=False))
+    assert r.status_code == 201
+    d = r.json()
+    assert d["is_british_auction"] is False
+    # X, Y and the trigger are not stored for a plain RFQ.
+    assert d["config"] == {
+        "is_british_auction": False,
+        "trigger_window_minutes": None,
+        "extension_minutes": None,
+        "trigger_type": None,
+    }
+    assert "without the British auction option" in d["events"][0]["reason"]
+
+    clock.set(17, 58)
+    bid(client, d["id"], a, 1000)
+    res = bid(client, d["id"], b, 900).json()  # takes L1 in the last 2 minutes
+    assert res["extended"] is False and res["reason"] is None and res["rank"] == 1
+
+    clock.set(18, 0)
+    d = client.get(f"/api/rfqs/{d['id']}").json()
+    assert d["status"] == "CLOSED" and d["current_close_at"] == iso(18, 0)
+    assert d["events"][-1]["event_type"] == "AUCTION_CLOSED"
+    assert client.get("/api/rfqs").json()["items"][0]["is_british_auction"] is False
+
+
+# --- The database guards the rules too ------------------------------------------------
+
+
+def test_database_refuses_an_extension_past_forced_close(client):
+    rfq_id = make_rfq(client)
+    past_forced = datetime(2026, 11, 3, 18, 31, tzinfo=UTC)
+    with SessionLocal() as db, pytest.raises(IntegrityError, match="current_within_forced"):
+        db.execute(update(Rfq).where(Rfq.id == rfq_id).values(current_close_at=past_forced))
+        db.commit()
+
+
+def test_database_refuses_extending_a_plain_rfq(client):
+    rfq_id = client.post("/api/rfqs", json=rfq_body(is_british_auction=False)).json()["id"]
+    later = datetime(2026, 11, 3, 18, 5, tzinfo=UTC)
+    with SessionLocal() as db, pytest.raises(IntegrityError, match="only_british_auction_extends"):
+        db.execute(update(Rfq).where(Rfq.id == rfq_id).values(current_close_at=later))
+        db.commit()

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Iterable
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import func, select
@@ -64,28 +65,37 @@ def create_rfq(db: Session, data: RfqCreate, now: datetime) -> Rfq:
         bid_close_at=data.bid_close_at,
         current_close_at=data.bid_close_at,
         forced_close_at=data.forced_close_at,
+        is_british_auction=data.is_british_auction,
         trigger_window_minutes=data.trigger_window_minutes,
         extension_minutes=data.extension_minutes,
         trigger_type=data.trigger_type,
-        status=rules.compute_status(data.bid_start_at, data.bid_close_at, data.forced_close_at, now),
+        status=rules.compute_status(
+            data.bid_start_at, data.bid_close_at, data.forced_close_at, now
+        ),
         extension_count=0,
     )
     db.add(rfq)
     try:
         db.flush()
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
-        raise Conflict(f"RFQ reference {data.reference_id} is already in use.") from None
+        if "uq_rfqs_reference_id" in str(exc.orig):
+            raise Conflict(f"RFQ reference {data.reference_id} is already in use.") from None
+        raise
+    if data.is_british_auction:
+        reason = (
+            f"British auction created. Extends by Y = {data.extension_minutes} min on "
+            f"{TRIGGER_DESCRIPTION[data.trigger_type]} in the last "
+            f"X = {data.trigger_window_minutes} min before close."
+        )
+    else:
+        reason = "RFQ created without the British auction option: it closes at the bid close time."
     db.add(
         AuctionEvent(
             rfq_id=rfq.id,
             event_type=EventType.RFQ_CREATED,
             new_close_at=rfq.current_close_at,
-            reason=(
-                f"British auction created. Extends by Y = {data.extension_minutes} min on "
-                f"{TRIGGER_DESCRIPTION[data.trigger_type]} in the last "
-                f"X = {data.trigger_window_minutes} min before close."
-            ),
+            reason=reason,
             created_at=now,
         )
     )
@@ -147,6 +157,7 @@ def _summary(rfq: Rfq, now: datetime, lowest, bid_count: int, supplier_count: in
         "bid_count": bid_count,
         "supplier_count": supplier_count,
         "extension_count": rfq.extension_count,
+        "is_british_auction": rfq.is_british_auction,
         "trigger_type": rfq.trigger_type,
     }
 
@@ -183,18 +194,20 @@ def _bid_out(bid: Bid, names: dict[int, str]) -> dict:
     }
 
 
-def _names(db: Session) -> dict[int, str]:
-    return dict(db.execute(select(Supplier.id, Supplier.name)).all())
+def _names(db: Session, supplier_ids: Iterable[int]) -> dict[int, str]:
+    """Names for just these suppliers."""
+    ids = set(supplier_ids)
+    if not ids:
+        return {}
+    return dict(db.execute(select(Supplier.id, Supplier.name).where(Supplier.id.in_(ids))).all())
 
 
 def rfq_detail(db: Session, rfq_id: int, now: datetime) -> dict:
     rfq = get_rfq(db, rfq_id)
-    names = _names(db)
     latest = {b.id: b for b in _latest_bids(db, rfq_id)}
+    names = _names(db, (b.supplier_id for b in latest.values()))
     ranked = rules.rank([_standing(b) for b in latest.values()])
-    ranking = [
-        {**_bid_out(latest[s.bid_id], names), "rank": i + 1} for i, s in enumerate(ranked)
-    ]
+    ranking = [{**_bid_out(latest[s.bid_id], names), "rank": i + 1} for i, s in enumerate(ranked)]
     bids = list(
         db.scalars(
             select(Bid)
@@ -202,18 +215,13 @@ def rfq_detail(db: Session, rfq_id: int, now: datetime) -> dict:
             .order_by(Bid.total_amount, Bid.created_at, Bid.id)
         )
     )
-    events = list(
-        db.scalars(
-            select(AuctionEvent)
-            .where(AuctionEvent.rfq_id == rfq_id)
-            .order_by(AuctionEvent.created_at, AuctionEvent.id)
-        )
-    )
+    events = list_events(db, rfq_id)
     lowest = ranking[0]["total_amount"] if ranking else None
     return {
         **_summary(rfq, now, lowest, len(bids), len(ranking)),
         "server_time": now,
         "config": {
+            "is_british_auction": rfq.is_british_auction,
             "trigger_window_minutes": rfq.trigger_window_minutes,
             "extension_minutes": rfq.extension_minutes,
             "trigger_type": rfq.trigger_type,
@@ -222,6 +230,17 @@ def rfq_detail(db: Session, rfq_id: int, now: datetime) -> dict:
         "bids": [_bid_out(b, names) for b in bids],
         "events": events,
     }
+
+
+def list_events(db: Session, rfq_id: int) -> list[AuctionEvent]:
+    """The activity log, oldest first."""
+    return list(
+        db.scalars(
+            select(AuctionEvent)
+            .where(AuctionEvent.rfq_id == rfq_id)
+            .order_by(AuctionEvent.created_at, AuctionEvent.id)
+        )
+    )
 
 
 # --- Bidding --------------------------------------------------------------------------
@@ -238,7 +257,10 @@ def place_bid(db: Session, rfq_id: int, data: BidCreate, now: datetime) -> dict:
     if supplier is None:
         raise NotFound(f"Supplier {data.supplier_id} not found.")
 
-    if data.quote_valid_until < now.date():
+    # A calendar date from the supplier's own time zone. Compare against the
+    # earliest date anywhere on Earth right now (UTC-12), so nobody is refused
+    # a quote valid "today".
+    if data.quote_valid_until < (now - timedelta(hours=12)).date():
         raise rules.BidRejected("Quote validity date cannot be in the past.")
 
     latest = _latest_bids(db, rfq_id)
@@ -252,7 +274,7 @@ def place_bid(db: Session, rfq_id: int, data: BidCreate, now: datetime) -> dict:
         previous_total=previous.total_amount if previous else None,
     )
 
-    names = _names(db)
+    names = _names(db, [*(b.supplier_id for b in latest), supplier.id])
     outcome = rules.evaluate_bid(
         now=now,
         standings=[_standing(b) for b in latest],
@@ -304,7 +326,9 @@ def place_bid(db: Session, rfq_id: int, data: BidCreate, now: datetime) -> dict:
         db.add(
             AuctionEvent(
                 rfq_id=rfq.id,
-                event_type=EventType.TIME_EXTENDED if outcome.extended else EventType.EXTENSION_BLOCKED,
+                event_type=EventType.TIME_EXTENDED
+                if outcome.extended
+                else EventType.EXTENSION_BLOCKED,
                 bid_id=bid.id,
                 supplier_id=supplier.id,
                 previous_close_at=outcome.previous_close_at,
@@ -365,24 +389,23 @@ def sync_statuses(db: Session, now: datetime, rfq_id: int | None = None) -> int:
         stmt = stmt.where(Rfq.id == rfq_id)
 
     closed = 0
-    names: dict[int, str] | None = None
     for rfq in db.scalars(stmt):
         status = status_of(rfq, now)
         if status == rfq.status:
             continue
         rfq.status = status
         if status in (AuctionStatus.CLOSED, AuctionStatus.FORCE_CLOSED):
-            names = names if names is not None else _names(db)
-            db.add(_close_event(db, rfq, status, names))
+            db.add(_close_event(db, rfq, status))
             closed += 1
     db.commit()
     return closed
 
 
-def _close_event(db: Session, rfq: Rfq, status: AuctionStatus, names: dict[int, str]) -> AuctionEvent:
+def _close_event(db: Session, rfq: Rfq, status: AuctionStatus) -> AuctionEvent:
     ranked = rules.rank([_standing(b) for b in _latest_bids(db, rfq.id)])
     if ranked:
         winner = ranked[0]
+        names = _names(db, [winner.supplier_id])
         result = f"L1: {_label(names, winner.supplier_id)} at {_money(winner.total)}."
     else:
         result = "No bids were received."
