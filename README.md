@@ -1,5 +1,7 @@
 # British Auction RFQ
 
+[![CI](https://github.com/Vishrut28/British-Auction/actions/workflows/ci.yml/badge.svg)](https://github.com/Vishrut28/British-Auction/actions/workflows/ci.yml)
+
 An RFQ (Request for Quotation) system where suppliers bid in a **British
 auction**: bids made close to the end extend the auction, so nobody can win with
 a last-second bid. A **forced close** time caps every extension.
@@ -32,6 +34,8 @@ a last-second bid. A **forced close** time caps every extension.
 ## Run it with Docker
 
 ```bash
+git clone https://github.com/Vishrut28/British-Auction.git
+cd British-Auction
 docker compose up --build
 ```
 
