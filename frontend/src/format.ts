@@ -26,7 +26,11 @@ export function useServerNow(): number {
   return now
 }
 
-/** Calls `load` now and every `ms`, and again when the tab becomes visible. */
+/**
+ * Calls `load` now, then every `ms` while the tab is visible, and again as
+ * soon as the tab becomes visible. A hidden tab stops polling, but the first
+ * load always runs, so a page opened in a background tab is never left empty.
+ */
 export function usePolling(load: () => Promise<void> | void, ms: number) {
   const loadRef = useRef(load)
   loadRef.current = load
@@ -34,7 +38,7 @@ export function usePolling(load: () => Promise<void> | void, ms: number) {
     const tick = () => {
       if (document.visibilityState === 'visible') void loadRef.current()
     }
-    tick()
+    void loadRef.current()
     const id = setInterval(tick, ms)
     document.addEventListener('visibilitychange', tick)
     return () => {
@@ -79,9 +83,13 @@ export function fmtCountdown(ms: number): string {
   return `${pad(m)}:${pad(s)}`
 }
 
-export function fmtMinutesBetween(fromIso: string, toIso: string): string {
-  const mins = (new Date(toIso).getTime() - new Date(fromIso).getTime()) / 60000
-  return Number.isInteger(mins) ? `${mins} min` : `${mins.toFixed(1)} min`
+/** "5 min", "45 s", "2 min 30 s". */
+export function fmtDurationBetween(fromIso: string, toIso: string): string {
+  const total = Math.round((new Date(toIso).getTime() - new Date(fromIso).getTime()) / 1000)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  if (!s) return `${m} min`
+  return m ? `${m} min ${s} s` : `${s} s`
 }
 
 export const STATUS_LABEL: Record<AuctionStatus, string> = {
@@ -92,9 +100,9 @@ export const STATUS_LABEL: Record<AuctionStatus, string> = {
 }
 
 export const TRIGGER_LABEL: Record<TriggerType, string> = {
-  BID_RECEIVED: 'Bid received in last X minutes',
-  ANY_RANK_CHANGE: 'Any supplier rank change in last X minutes',
-  L1_CHANGE: 'Lowest bidder (L1) change in last X minutes',
+  BID_RECEIVED: 'Bid received in the last X min',
+  ANY_RANK_CHANGE: 'Any supplier rank change in the last X min',
+  L1_CHANGE: 'Lowest bidder (L1) change in the last X min',
 }
 
 export const TRIGGER_SHORT: Record<TriggerType, string> = {

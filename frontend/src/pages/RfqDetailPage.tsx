@@ -8,7 +8,7 @@ import {
   fmtCountdown,
   fmtDate,
   fmtDateTime,
-  fmtMinutesBetween,
+  fmtDurationBetween,
   fmtMoney,
   fmtTime,
   liveStatus,
@@ -102,7 +102,7 @@ export function RfqDetailPage() {
           value={fmtDateTime(rfq.current_close_at)}
           sub={
             extended
-              ? `Extended ${rfq.extension_count}× (+${fmtMinutesBetween(rfq.bid_close_at, rfq.current_close_at)}) from ${fmtTime(rfq.bid_close_at)}`
+              ? `Extended ${rfq.extension_count}× (+${fmtDurationBetween(rfq.bid_close_at, rfq.current_close_at)}) from ${fmtTime(rfq.bid_close_at)}`
               : 'Not extended'
           }
         />
