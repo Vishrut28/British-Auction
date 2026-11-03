@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import engine as rules
-from app.models import AuctionEvent, AuctionStatus, Bid, EventType, Rfq, Supplier
+from app.models import AuctionEvent, AuctionStatus, Bid, EventType, Rfq, Supplier, TriggerType
 from app.schemas import BidCreate, RfqCreate, SupplierCreate
 
 
@@ -24,6 +24,12 @@ class Conflict(Exception):
 
 
 OPEN_STATUSES = (AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE)
+
+TRIGGER_DESCRIPTION = {
+    TriggerType.BID_RECEIVED: "any bid received",
+    TriggerType.ANY_RANK_CHANGE: "any supplier rank change",
+    TriggerType.L1_CHANGE: "lowest bidder (L1) change",
+}
 
 
 # --- Suppliers ------------------------------------------------------------------------
@@ -76,9 +82,9 @@ def create_rfq(db: Session, data: RfqCreate, now: datetime) -> Rfq:
             event_type=EventType.RFQ_CREATED,
             new_close_at=rfq.current_close_at,
             reason=(
-                f"British auction created: trigger {data.trigger_type.value}, "
-                f"window X = {data.trigger_window_minutes} min, "
-                f"extension Y = {data.extension_minutes} min."
+                f"British auction created. Extends by Y = {data.extension_minutes} min on "
+                f"{TRIGGER_DESCRIPTION[data.trigger_type]} in the last "
+                f"X = {data.trigger_window_minutes} min before close."
             ),
             created_at=now,
         )

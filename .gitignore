@@ -12,3 +12,6 @@ dist/
 .env
 .vscode/
 .idea/
+
+# Local editor/agent config
+.claude/
