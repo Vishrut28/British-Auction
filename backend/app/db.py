@@ -19,7 +19,11 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+# Every connection uses UTC, so timestamps come back as UTC whatever the
+# server's own time zone is.
+engine = create_engine(
+    settings.database_url, pool_pre_ping=True, connect_args={"options": "-c timezone=UTC"}
+)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
