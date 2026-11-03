@@ -4,6 +4,8 @@ import { fmtMoney, fmtTime } from '../format'
 
 const SUPPLIER_KEY = 'bidding-as-supplier'
 
+const toCents = (money: string) => Math.round(Number(money) * 100)
+
 function readSaved(): number | null {
   try {
     const v = localStorage.getItem(SUPPLIER_KEY)
@@ -50,7 +52,14 @@ export function BidForm({
   const [result, setResult] = useState<BidResult | null>(null)
 
   useEffect(() => {
-    api.listSuppliers().then(setSuppliers).catch((e) => setError((e as Error).message))
+    api
+      .listSuppliers()
+      .then((list) => {
+        setSuppliers(list)
+        // A remembered supplier may no longer exist (for example after a reset).
+        setSupplierId((id) => (id !== null && list.some((s) => s.id === id) ? id : null))
+      })
+      .catch((e) => setError((e as Error).message))
   }, [])
 
   useEffect(() => {
@@ -63,9 +72,13 @@ export function BidForm({
 
   const supplier = suppliers.find((s) => s.id === supplierId) ?? null
   const mine = rfq.ranking.find((r) => r.supplier_id === supplierId) ?? null
-  const charges = [form.freight_charges, form.origin_charges, form.destination_charges].map((v) => Number(v || 0))
-  const total = charges.reduce((a, b) => a + b, 0)
-  const tooHigh = mine !== null && total >= Number(mine.total_amount)
+  const charges = [form.freight_charges, form.origin_charges, form.destination_charges].map((v) =>
+    Number(v || 0),
+  )
+  // Whole cents, so 100.10 + 100.10 + 100.10 is exactly 300.30, as on the server.
+  const totalCents = charges.reduce((sum, c) => sum + Math.round(c * 100), 0)
+  const total = totalCents / 100
+  const tooHigh = mine !== null && totalCents >= toCents(mine.total_amount)
 
   // Prefill from the supplier's current quote, so lowering a price is quick.
   useEffect(() => {
@@ -89,7 +102,8 @@ export function BidForm({
         Bidding is closed.{' '}
         {winner ? (
           <>
-            Final L1: <strong>{winner.supplier_name}</strong> at <strong>{fmtMoney(winner.total_amount)}</strong>.
+            Final L1: <strong>{winner.supplier_name}</strong> at{' '}
+            <strong>{fmtMoney(winner.total_amount)}</strong>.
           </>
         ) : (
           'No bids were received.'
@@ -106,8 +120,9 @@ export function BidForm({
     if (!supplierId) return setError('Choose which supplier you are bidding as.')
     if (!form.carrier_name.trim()) return setError('Carrier name is required.')
     if (charges.some((c) => Number.isNaN(c) || c < 0)) return setError('Charges must be zero or more.')
-    if (total <= 0) return setError('Total charges must be greater than zero.')
-    if (tooHigh) return setError(`Your new bid must be lower than your current ${fmtMoney(mine!.total_amount)}.`)
+    if (totalCents <= 0) return setError('Total charges must be greater than zero.')
+    if (tooHigh)
+      return setError(`Your new bid must be lower than your current ${fmtMoney(mine!.total_amount)}.`)
     setSubmitting(true)
     setError(null)
     setResult(null)
@@ -171,8 +186,8 @@ export function BidForm({
         <p className="hint-box">
           {mine ? (
             <>
-              {supplier.name} is <strong>L{mine.rank}</strong> at <strong>{fmtMoney(mine.total_amount)}</strong>. A new
-              bid must be lower.
+              {supplier.name} is <strong>L{mine.rank}</strong> at{' '}
+              <strong>{fmtMoney(mine.total_amount)}</strong>. A new bid must be lower.
             </>
           ) : (
             <>{supplier.name} has not bid yet.</>
@@ -187,11 +202,23 @@ export function BidForm({
       <div className="grid-3 tight">
         <label className="field">
           <span className="field-label">Freight</span>
-          <input type="number" min={0} step="0.01" value={form.freight_charges} onChange={set('freight_charges')} />
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={form.freight_charges}
+            onChange={set('freight_charges')}
+          />
         </label>
         <label className="field">
           <span className="field-label">Origin</span>
-          <input type="number" min={0} step="0.01" value={form.origin_charges} onChange={set('origin_charges')} />
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={form.origin_charges}
+            onChange={set('origin_charges')}
+          />
         </label>
         <label className="field">
           <span className="field-label">Destination</span>

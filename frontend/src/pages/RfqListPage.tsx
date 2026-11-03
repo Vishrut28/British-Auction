@@ -13,8 +13,17 @@ import {
   useServerNow,
 } from '../format'
 
+type Kind = 'british' | 'all' | 'standard'
+
+const KINDS: { value: Kind; label: string }[] = [
+  { value: 'british', label: 'British auctions' },
+  { value: 'standard', label: 'Standard RFQs' },
+  { value: 'all', label: 'All' },
+]
+
 export function RfqListPage() {
-  const [items, setItems] = useState<RfqSummary[] | null>(null)
+  const [all, setAll] = useState<RfqSummary[] | null>(null)
+  const [kind, setKind] = useState<Kind>('british')
   const [error, setError] = useState<string | null>(null)
   const now = useServerNow()
   const navigate = useNavigate()
@@ -23,19 +32,34 @@ export function RfqListPage() {
     try {
       const res = await api.listRfqs()
       syncServerClock(res.server_time)
-      setItems(res.items)
+      setAll(res.items)
       setError(null)
     } catch (e) {
       setError((e as Error).message)
     }
   }, 5000)
 
+  const items = all && all.filter((r) => kind === 'all' || (kind === 'british') === r.is_british_auction)
+
   return (
     <>
       <div className="page-head">
         <div>
           <h1>British Auctions</h1>
-          <p className="muted">Every RFQ running as a British auction. Updates live.</p>
+          <p className="muted">RFQs with British auction bidding. Updates live.</p>
+        </div>
+        <div className="segmented" role="group" aria-label="Show">
+          {KINDS.map((k) => (
+            <button
+              key={k.value}
+              type="button"
+              className={kind === k.value ? 'active' : ''}
+              aria-pressed={kind === k.value}
+              onClick={() => setKind(k.value)}
+            >
+              {k.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -45,7 +69,7 @@ export function RfqListPage() {
 
       {items?.length === 0 && (
         <div className="card empty">
-          <p>No auctions yet.</p>
+          <p>{all?.length ? 'Nothing in this view.' : 'No auctions yet.'}</p>
           <Link to="/rfqs/new" className="btn btn-primary">
             Create the first RFQ
           </Link>
@@ -76,14 +100,22 @@ export function RfqListPage() {
                         {r.reference_id}
                       </Link>
                       <div className="muted small">
-                        {r.name} · {TRIGGER_SHORT[r.trigger_type]}
+                        {r.name} ·{' '}
+                        {r.trigger_type ? (
+                          <>British auction · {TRIGGER_SHORT[r.trigger_type]}</>
+                        ) : (
+                          'Standard RFQ'
+                        )}
                       </div>
                     </td>
                     <td className="num strong">{fmtMoney(r.lowest_bid)}</td>
                     <td>
                       {fmtDateTime(r.current_close_at)}
                       {r.extension_count > 0 && (
-                        <span className="tag tag-ext" title={`Original close: ${fmtDateTime(r.bid_close_at)}`}>
+                        <span
+                          className="tag tag-ext"
+                          title={`Original close: ${fmtDateTime(r.bid_close_at)}`}
+                        >
                           +{r.extension_count} ext
                         </span>
                       )}

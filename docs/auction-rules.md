@@ -4,6 +4,16 @@ The assignment leaves some behaviour open. This file pins each rule down, so the
 code, the tests and the UI all follow the same reading. Rules marked
 **(interpretation)** are choices we made where the brief was silent.
 
+## The British Auction option
+
+An RFQ is created with the British Auction option on (the default) or off.
+
+- **On:** the buyer sets X, Y and one trigger type, and every rule below applies.
+- **Off:** a plain RFQ. Bids are accepted and ranked the same way, but the
+  auction always ends at `bid_close_at`. It is never extended, so it can only
+  end as `CLOSED`, never `FORCE_CLOSED`. The forced close time is still
+  required and validated, because the brief lists it as an RFQ field.
+
 ## Time
 
 - The **server clock** decides everything. Clients never send a bid time.

@@ -22,6 +22,7 @@ function defaults() {
     bid_start_at: toLocalInput(now),
     bid_close_at: toLocalInput(addMinutes(now, 15)),
     forced_close_at: toLocalInput(addMinutes(now, 30)),
+    is_british_auction: true,
     trigger_window_minutes: '5',
     extension_minutes: '3',
     trigger_type: 'L1_CHANGE' as TriggerType,
@@ -29,6 +30,7 @@ function defaults() {
 }
 
 type Form = ReturnType<typeof defaults>
+type TextField = Exclude<keyof Form, 'is_british_auction'>
 
 // Same rules as the backend (docs/auction-rules.md), checked early for quick feedback.
 function validate(f: Form): Partial<Record<keyof Form, string>> {
@@ -46,9 +48,11 @@ function validate(f: Form): Partial<Record<keyof Form, string>> {
   if (Number.isNaN(forced)) e.forced_close_at = 'Required.'
   else if (!Number.isNaN(close) && forced <= close)
     e.forced_close_at = 'Must be later than the bid close time.'
-  for (const k of ['trigger_window_minutes', 'extension_minutes'] as const) {
-    const n = Number(f[k])
-    if (!Number.isInteger(n) || n < 1 || n > 1440) e[k] = 'Whole minutes, 1 to 1440.'
+  if (f.is_british_auction) {
+    for (const k of ['trigger_window_minutes', 'extension_minutes'] as const) {
+      const n = Number(f[k])
+      if (!f[k].trim() || !Number.isInteger(n) || n < 1 || n > 1440) e[k] = 'Whole minutes, 1 to 1440.'
+    }
   }
   return e
 }
@@ -62,7 +66,7 @@ export function CreateRfqPage() {
   const errors = useMemo(() => validate(form), [form])
   const show = (k: keyof Form) => (touched ? errors[k] : undefined)
 
-  const set = (k: keyof Form) => (ev: { target: { value: string } }) =>
+  const set = (k: TextField) => (ev: { target: { value: string } }) =>
     setForm((f) => ({ ...f, [k]: ev.target.value }))
 
   async function submit(ev: FormEvent) {
@@ -79,9 +83,12 @@ export function CreateRfqPage() {
         bid_start_at: new Date(form.bid_start_at).toISOString(),
         bid_close_at: new Date(form.bid_close_at).toISOString(),
         forced_close_at: new Date(form.forced_close_at).toISOString(),
-        trigger_window_minutes: Number(form.trigger_window_minutes),
-        extension_minutes: Number(form.extension_minutes),
-        trigger_type: form.trigger_type,
+        is_british_auction: form.is_british_auction,
+        ...(form.is_british_auction && {
+          trigger_window_minutes: Number(form.trigger_window_minutes),
+          extension_minutes: Number(form.extension_minutes),
+          trigger_type: form.trigger_type,
+        }),
       })
       navigate(`/rfqs/${rfq.id}`)
     } catch (e) {
@@ -98,7 +105,9 @@ export function CreateRfqPage() {
       <div className="page-head">
         <div>
           <h1>New RFQ</h1>
-          <p className="muted">Create an RFQ with British auction bidding enabled.</p>
+          <p className="muted">
+            Create an RFQ. With the British auction option on, late bids extend the close time.
+          </p>
         </div>
       </div>
 
@@ -140,59 +149,77 @@ export function CreateRfqPage() {
         </section>
 
         <section>
-          <h2>British auction configuration</h2>
-          <div className="grid-2">
-            <Field
-              label="Trigger window (X minutes)"
-              hint="How close to the close time bidding activity is watched."
-              error={show('trigger_window_minutes')}
-            >
+          <div className="section-head">
+            <h2>British auction</h2>
+            <label className="switch">
               <input
-                type="number"
-                min={1}
-                max={1440}
-                value={form.trigger_window_minutes}
-                onChange={set('trigger_window_minutes')}
+                type="checkbox"
+                checked={form.is_british_auction}
+                onChange={(e) => setForm((f) => ({ ...f, is_british_auction: e.target.checked }))}
               />
-            </Field>
-            <Field
-              label="Extension duration (Y minutes)"
-              hint="Time added to the close time when the trigger fires."
-              error={show('extension_minutes')}
-            >
-              <input
-                type="number"
-                min={1}
-                max={1440}
-                value={form.extension_minutes}
-                onChange={set('extension_minutes')}
-              />
-            </Field>
+              <span>Enable British auction</span>
+            </label>
           </div>
+          {form.is_british_auction ? (
+            <>
+              <div className="grid-2">
+                <Field
+                  label="Trigger window (X minutes)"
+                  hint="How close to the close time bidding activity is watched."
+                  error={show('trigger_window_minutes')}
+                >
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={form.trigger_window_minutes}
+                    onChange={set('trigger_window_minutes')}
+                  />
+                </Field>
+                <Field
+                  label="Extension duration (Y minutes)"
+                  hint="Time added to the close time when the trigger fires."
+                  error={show('extension_minutes')}
+                >
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={form.extension_minutes}
+                    onChange={set('extension_minutes')}
+                  />
+                </Field>
+              </div>
 
-          <fieldset className="radio-group">
-            <legend>Extension trigger</legend>
-            {(Object.keys(TRIGGER_LABEL) as TriggerType[]).map((t) => (
-              <label key={t} className={`radio-card ${form.trigger_type === t ? 'selected' : ''}`}>
-                <input
-                  type="radio"
-                  name="trigger_type"
-                  value={t}
-                  checked={form.trigger_type === t}
-                  onChange={set('trigger_type')}
-                />
-                <span>
-                  <strong>{TRIGGER_LABEL[t].replace('X', String(x))}</strong>
-                  <span className="muted small">{TRIGGER_HELP[t]}</span>
-                </span>
-              </label>
-            ))}
-          </fieldset>
+              <fieldset className="radio-group">
+                <legend>Extension trigger</legend>
+                {(Object.keys(TRIGGER_LABEL) as TriggerType[]).map((t) => (
+                  <label key={t} className={`radio-card ${form.trigger_type === t ? 'selected' : ''}`}>
+                    <input
+                      type="radio"
+                      name="trigger_type"
+                      value={t}
+                      checked={form.trigger_type === t}
+                      onChange={set('trigger_type')}
+                    />
+                    <span>
+                      <strong>{TRIGGER_LABEL[t].replace('X', String(x))}</strong>
+                      <span className="muted small">{TRIGGER_HELP[t]}</span>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
 
-          <p className="summary">
-            If the trigger fires in the last <strong>{x} min</strong> before close, the close time moves{' '}
-            <strong>{y} min</strong> later, but never past the forced close.
-          </p>
+              <p className="summary">
+                If the trigger fires in the last <strong>{x} min</strong> before close, the close time moves{' '}
+                <strong>{y} min</strong> later, but never past the forced close.
+              </p>
+            </>
+          ) : (
+            <p className="summary">
+              Without the British auction option, bidding simply ends at the bid close time: no extensions.
+            </p>
+          )}
         </section>
 
         <div className="form-actions">
@@ -229,7 +256,11 @@ function Field({
     <label className={`field ${error ? 'has-error' : ''}`}>
       <span className="field-label">{label}</span>
       {children}
-      {error ? <span className="field-error">{error}</span> : hint && <span className="field-hint">{hint}</span>}
+      {error ? (
+        <span className="field-error">{error}</span>
+      ) : (
+        hint && <span className="field-hint">{hint}</span>
+      )}
     </label>
   )
 }

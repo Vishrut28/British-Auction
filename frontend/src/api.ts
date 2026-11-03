@@ -33,7 +33,8 @@ export interface RfqSummary {
   bid_count: number
   supplier_count: number
   extension_count: number
-  trigger_type: TriggerType
+  is_british_auction: boolean
+  trigger_type: TriggerType | null
 }
 
 export interface Bid {
@@ -69,9 +70,11 @@ export interface AuctionEvent {
 export interface RfqDetail extends RfqSummary {
   server_time: string
   config: {
-    trigger_window_minutes: number
-    extension_minutes: number
-    trigger_type: TriggerType
+    is_british_auction: boolean
+    // null when the British auction option is off
+    trigger_window_minutes: number | null
+    extension_minutes: number | null
+    trigger_type: TriggerType | null
   }
   ranking: RankedBid[]
   bids: Bid[]
@@ -85,9 +88,10 @@ export interface RfqCreate {
   bid_start_at: string
   bid_close_at: string
   forced_close_at: string
-  trigger_window_minutes: number
-  extension_minutes: number
-  trigger_type: TriggerType
+  is_british_auction: boolean
+  trigger_window_minutes?: number
+  extension_minutes?: number
+  trigger_type?: TriggerType
 }
 
 export interface BidCreate {
@@ -120,7 +124,7 @@ export class ApiError extends Error {
 
 // FastAPI returns {detail: "..."} for our own errors, and
 // {detail: [{loc, msg}, ...]} for request validation errors.
-function errorMessage(body: unknown, status: number): string {
+export function errorMessage(body: unknown, status: number): string {
   const detail = (body as { detail?: unknown } | null)?.detail
   if (typeof detail === 'string') return detail
   if (Array.isArray(detail)) {
@@ -148,8 +152,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   listRfqs: () => request<{ server_time: string; items: RfqSummary[] }>('/rfqs'),
   getRfq: (id: number) => request<RfqDetail>(`/rfqs/${id}`),
-  createRfq: (data: RfqCreate) =>
-    request<RfqDetail>('/rfqs', { method: 'POST', body: JSON.stringify(data) }),
+  createRfq: (data: RfqCreate) => request<RfqDetail>('/rfqs', { method: 'POST', body: JSON.stringify(data) }),
   placeBid: (rfqId: number, data: BidCreate) =>
     request<BidResult>(`/rfqs/${rfqId}/bids`, { method: 'POST', body: JSON.stringify(data) }),
   listSuppliers: () => request<Supplier[]>('/suppliers'),

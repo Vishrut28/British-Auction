@@ -82,8 +82,9 @@ sequenceDiagram
 
 ## Design decisions
 
-**The server clock decides.** Clients never send a bid time. Every response
-includes `server_time`, and the UI counts down on an offset from it, so a viewer
+**The server clock decides.** Clients never send a bid time. The listing and
+details responses include `server_time`, and the UI counts down on an offset
+from it, so a viewer
 with a wrong clock still sees the right countdown. The server still makes the
 final call on every bid.
 
@@ -129,7 +130,7 @@ for the success metrics below.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/rfqs` | Listing: RFQ, lowest bid, current close, forced close, status |
-| `POST` | `/api/rfqs` | Create an RFQ with its British auction configuration |
+| `POST` | `/api/rfqs` | Create an RFQ, with the British auction option on (X, Y, trigger) or off |
 | `GET` | `/api/rfqs/{id}` | Details: config, ranking with quote details, all bids, activity log |
 | `GET` | `/api/rfqs/{id}/events` | Activity log only |
 | `POST` | `/api/rfqs/{id}/bids` | Submit a quote |

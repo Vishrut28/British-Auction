@@ -47,13 +47,21 @@ export function RfqDetailPage() {
     lastStatus.current = status
   }, [status, load])
 
-  if (notFound) return <p className="muted">RFQ not found. <Link to="/">Back to auctions</Link></p>
-  if (!rfq || !status) return error ? <div className="alert alert-error">{error}</div> : <p className="muted">Loading…</p>
+  if (notFound)
+    return (
+      <p className="muted">
+        RFQ not found. <Link to="/">Back to auctions</Link>
+      </p>
+    )
+  if (!rfq || !status)
+    return error ? <div className="alert alert-error">{error}</div> : <p className="muted">Loading…</p>
 
   const closeMs = new Date(rfq.current_close_at).getTime()
   const startMs = new Date(rfq.bid_start_at).getTime()
-  const windowStartMs = closeMs - rfq.config.trigger_window_minutes * 60000
-  const inWindow = status === 'ACTIVE' && now >= windowStartMs
+  const { config } = rfq
+  const windowMinutes = config.trigger_window_minutes
+  const windowStartMs = windowMinutes === null ? null : closeMs - windowMinutes * 60000
+  const inWindow = status === 'ACTIVE' && windowStartMs !== null && now >= windowStartMs
   const extended = rfq.current_close_at !== rfq.bid_close_at
 
   return (
@@ -74,7 +82,9 @@ export function RfqDetailPage() {
         <div className={`countdown ${inWindow ? 'countdown-hot' : ''}`}>
           {status === 'ACTIVE' && (
             <>
-              <span className="countdown-label">{inWindow ? 'In trigger window, closes in' : 'Closes in'}</span>
+              <span className="countdown-label">
+                {inWindow ? 'In trigger window, closes in' : 'Closes in'}
+              </span>
               <span className="countdown-value">{fmtCountdown(closeMs - now)}</span>
             </>
           )}
@@ -86,7 +96,9 @@ export function RfqDetailPage() {
           )}
           {(status === 'CLOSED' || status === 'FORCE_CLOSED') && (
             <>
-              <span className="countdown-label">{status === 'FORCE_CLOSED' ? 'Force closed at' : 'Closed at'}</span>
+              <span className="countdown-label">
+                {status === 'FORCE_CLOSED' ? 'Force closed at' : 'Closed at'}
+              </span>
               <span className="countdown-value small-value">{fmtTime(rfq.current_close_at)}</span>
             </>
           )}
@@ -96,7 +108,11 @@ export function RfqDetailPage() {
       {error && <div className="alert alert-warn">Connection problem, showing last known data: {error}</div>}
 
       <div className="stats">
-        <Stat label="Current lowest bid (L1)" value={fmtMoney(rfq.lowest_bid)} sub={rfq.ranking[0]?.supplier_name ?? 'No bids yet'} />
+        <Stat
+          label="Current lowest bid (L1)"
+          value={fmtMoney(rfq.lowest_bid)}
+          sub={rfq.ranking[0]?.supplier_name ?? 'No bids yet'}
+        />
         <Stat
           label="Current bid close"
           value={fmtDateTime(rfq.current_close_at)}
@@ -106,8 +122,16 @@ export function RfqDetailPage() {
               : 'Not extended'
           }
         />
-        <Stat label="Forced bid close" value={fmtDateTime(rfq.forced_close_at)} sub="Hard stop: never extended past" />
-        <Stat label="Bids" value={String(rfq.bid_count)} sub={`${rfq.supplier_count} supplier${rfq.supplier_count === 1 ? '' : 's'}`} />
+        <Stat
+          label="Forced bid close"
+          value={fmtDateTime(rfq.forced_close_at)}
+          sub="Hard stop: never extended past"
+        />
+        <Stat
+          label="Bids"
+          value={String(rfq.bid_count)}
+          sub={`${rfq.supplier_count} supplier${rfq.supplier_count === 1 ? '' : 's'}`}
+        />
       </div>
 
       <div className="layout-2">
@@ -219,12 +243,18 @@ export function RfqDetailPage() {
           <section className="card">
             <h2>Auction configuration</h2>
             <dl className="dl">
-              <dt>Trigger window (X)</dt>
-              <dd>{rfq.config.trigger_window_minutes} min</dd>
-              <dt>Extension duration (Y)</dt>
-              <dd>{rfq.config.extension_minutes} min</dd>
-              <dt>Extension trigger</dt>
-              <dd>{TRIGGER_LABEL[rfq.config.trigger_type].replace('X', String(rfq.config.trigger_window_minutes))}</dd>
+              <dt>British auction</dt>
+              <dd>{config.is_british_auction ? 'Enabled' : 'Off: no extensions'}</dd>
+              {config.trigger_type && (
+                <>
+                  <dt>Trigger window (X)</dt>
+                  <dd>{config.trigger_window_minutes} min</dd>
+                  <dt>Extension duration (Y)</dt>
+                  <dd>{config.extension_minutes} min</dd>
+                  <dt>Extension trigger</dt>
+                  <dd>{TRIGGER_LABEL[config.trigger_type].replace('X', String(windowMinutes))}</dd>
+                </>
+              )}
               <dt>Bid start</dt>
               <dd>{fmtDateTime(rfq.bid_start_at)}</dd>
               <dt>Original bid close</dt>
@@ -232,9 +262,10 @@ export function RfqDetailPage() {
               <dt>Forced bid close</dt>
               <dd>{fmtDateTime(rfq.forced_close_at)}</dd>
             </dl>
-            {status === 'ACTIVE' && (
+            {status === 'ACTIVE' && windowStartMs !== null && (
               <p className="muted small">
-                Trigger window now: {fmtTime(new Date(windowStartMs).toISOString())} – {fmtTime(rfq.current_close_at)}
+                Trigger window now: {fmtTime(new Date(windowStartMs).toISOString())} –{' '}
+                {fmtTime(rfq.current_close_at)}
               </p>
             )}
           </section>

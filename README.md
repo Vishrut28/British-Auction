@@ -20,7 +20,7 @@ a last-second bid. A **forced close** time caps every extension.
 
 | Brief | Implemented |
 |---|---|
-| §5 RFQ creation: name/reference, bid start, bid close, forced close, pickup date | `POST /api/rfqs` · *New RFQ* page |
+| §5 RFQ creation "with the British Auction option enabled": name/reference, bid start, bid close, forced close, pickup date | `POST /api/rfqs` · *New RFQ* page, with an *Enable British auction* switch (on by default) |
 | §5 Quote: carrier, freight / origin / destination charges, transit time, validity | `POST /api/rfqs/{id}/bids` · *Submit a quote* panel |
 | §5 Never extend beyond the forced close | `min(close + Y, forced)` in [engine.py](backend/app/engine.py), plus a database CHECK constraint |
 | §6.1 Trigger window X · §6.2 Extension Y | Per-RFQ config; the window is measured from the *current* close time |
@@ -95,23 +95,34 @@ npm run dev
 
 Open <http://localhost:5173>.
 
-## Tests
+## Tests and checks
 
 ```bash
 cd backend
-pytest
+pytest              # 67 tests
+ruff check . && ruff format --check app tests
 ```
 
-49 tests. The engine tests cover every rule in
-[auction-rules.md](docs/auction-rules.md), including each example from the
-brief. The API tests run against a real Postgres database (`rfq_test`, created
-automatically; set `TEST_DATABASE_URL` to change it). They cover validation,
-ranking, extensions, the forced-close cap, closing, and a race: two
-simultaneous bids in the trigger window must extend twice, which only holds
-because of the row lock.
+```bash
+cd frontend
+npm test            # 11 tests
+npm run lint && npm run format:check && npm run build
+```
 
-CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the backend tests
-on Postgres, plus the frontend lint and build, on every push.
+- **Engine tests** cover every rule in [auction-rules.md](docs/auction-rules.md),
+  including each example from the brief, and check that the three trigger
+  types nest (every L1 change is a rank change, and every rank change is a bid).
+- **API tests** run against a real Postgres database (`rfq_test`, created
+  automatically; set `TEST_DATABASE_URL` to change it). They cover validation,
+  ranking, all three triggers, the forced-close cap, closing, the British
+  auction option being off, the database constraints, and a race: two
+  simultaneous bids in the trigger window must extend twice, which only holds
+  because of the row lock.
+- **Frontend tests** cover the client-side status and countdown logic, and the
+  parsing of API error messages.
+
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs all of this on every
+push, plus `alembic check` to confirm the migrations match the models.
 
 ## Assumptions
 
@@ -122,4 +133,5 @@ The brief leaves some details open. Each choice is written down in
 - Rank is by each supplier's latest bid. On equal prices, whoever got there first ranks higher.
 - *Rank change* means a supplier who was already ranked moved. *L1 change* means a different supplier took L1 from someone. A first bid only triggers *bid received*.
 - **Force Closed** means extensions pushed the auction all the way to the forced close.
+- With the British auction option off, an RFQ closes at its bid close time and is never extended. The listing shows British auctions by default, with a filter for standard RFQs.
 - Login is out of scope: the UI picks which supplier is bidding.

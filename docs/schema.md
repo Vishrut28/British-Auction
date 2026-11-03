@@ -1,8 +1,13 @@
 # Schema design
 
-PostgreSQL, four tables. The migration is
-[`backend/alembic/versions/20261103_4251f99e8609_initial_schema.py`](../backend/alembic/versions/20261103_4251f99e8609_initial_schema.py),
-generated from [`backend/app/models.py`](../backend/app/models.py).
+PostgreSQL, four tables, defined in
+[`backend/app/models.py`](../backend/app/models.py). Two Alembic migrations
+build them, in [`backend/alembic/versions`](../backend/alembic/versions):
+
+1. `4251f99e8609_initial_schema`: the four tables.
+2. `ec9aecef6a3a_british_auction_option`: the *British Auction option* on each RFQ.
+
+CI runs `alembic check` to confirm the migrations match the models exactly.
 [auction-rules.md](auction-rules.md) explains the rules behind the constraints.
 
 ```mermaid
@@ -22,9 +27,10 @@ erDiagram
         timestamptz bid_close_at "as set by buyer, never changes"
         timestamptz current_close_at "moves later on extension"
         timestamptz forced_close_at "hard stop"
-        int trigger_window_minutes "X"
-        int extension_minutes "Y"
-        varchar trigger_type "BID_RECEIVED | ANY_RANK_CHANGE | L1_CHANGE"
+        boolean is_british_auction "the British Auction option"
+        int trigger_window_minutes "X, null when option is off"
+        int extension_minutes "Y, null when option is off"
+        varchar trigger_type "BID_RECEIVED | ANY_RANK_CHANGE | L1_CHANGE, or null"
         varchar status "SCHEDULED | ACTIVE | CLOSED | FORCE_CLOSED"
         int extension_count
         timestamptz created_at
@@ -67,9 +73,12 @@ erDiagram
 
 ### `rfqs`
 
-One row per RFQ. Every RFQ in this system is a British auction, so the auction
-settings (X, Y, trigger type) live on the same row. No separate config table is
-needed, because they are always read together.
+One row per RFQ. The brief creates an RFQ "with the British Auction option
+enabled", so `is_british_auction` stores that option. When it is on, X, Y and
+the trigger type are required. When it is off, they are NULL, and the RFQ is a
+plain one: it closes at its bid close time and is never extended. The
+settings live on the RFQ row rather than in a separate config table, because
+they are 1:1 with it and always read together.
 
 The three close times are kept apart on purpose:
 
@@ -122,6 +131,8 @@ These hold even if the application code has a bug:
 | `ck_rfqs_current_not_before_close`          | an extension never moves the close time earlier           |
 | `ck_rfqs_current_within_forced`             | **no extension goes past the forced close**               |
 | `ck_rfqs_trigger_window_positive`, `ck_rfqs_extension_positive` | X and Y are positive                  |
+| `ck_rfqs_auction_config_matches_option`     | X, Y and the trigger are set exactly when the British auction option is on |
+| `ck_rfqs_only_british_auction_extends`      | an RFQ without the option is never extended               |
 | `ck_bids_*_non_negative`, `ck_bids_total_positive` | charges are not negative; the total is above zero  |
 | `ck_bids_transit_time_positive`             | transit time is positive                                  |
 | `ck_auction_events_extension_moves_later`   | an extension event always moves the close time later      |
